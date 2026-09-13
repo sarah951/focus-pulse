@@ -1,0 +1,978 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1"><style>:root{color-scheme:light}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Focus Pulse</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700;12..96,800&family=IBM+Plex+Mono:wght@500;600;700&family=Karla:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0A0D14;
+    --surface: rgba(24, 29, 43, 0.62);
+    --surface-solid: #181D2B;
+    --surface-2: rgba(34, 40, 58, 0.7);
+    --ink: #F3F5FC;
+    --ink-soft: #9098B4;
+    --border: rgba(255, 255, 255, 0.08);
+    --focus: #6E8BFF;
+    --focus-soft: rgba(110, 139, 255, 0.16);
+    --break: #FF3E8C;
+    --break-soft: rgba(255, 62, 140, 0.16);
+    --good: #35E7A8;
+    --good-soft: rgba(53, 231, 168, 0.16);
+    --shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.6);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'Karla', system-ui, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 32px 20px;
+    position: relative;
+    overflow-x: hidden;
+  }
+
+  #bgCanvas {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 0;
+    display: block;
+  }
+  .vignette {
+    position: fixed;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+    background: radial-gradient(ellipse at 50% 40%, transparent 40%, rgba(6, 8, 13, 0.75) 100%);
+  }
+
+  h1, .phase-label { text-wrap: balance; }
+
+  .app {
+    width: 100%;
+    max-width: 560px;
+    position: relative;
+    z-index: 2;
+  }
+
+  .flash-overlay {
+    position: fixed;
+    inset: 0;
+    background: var(--flash-color, var(--focus));
+    opacity: 0;
+    pointer-events: none;
+    z-index: 50;
+    mix-blend-mode: screen;
+  }
+  .flash-overlay.flash-active { animation: flashPulse 900ms ease-out; }
+  @keyframes flashPulse {
+    0% { opacity: 0; }
+    12% { opacity: .7; }
+    100% { opacity: 0; }
+  }
+
+  .view { display: flex; flex-direction: column; gap: 22px; }
+
+  /* ---- Setup view ---- */
+  .eyebrow {
+    font-weight: 700;
+    font-size: 12.5px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--focus);
+    margin: 0;
+  }
+  .setup-view h1 {
+    font-family: 'Bricolage Grotesque', sans-serif;
+    font-weight: 700;
+    font-size: 38px;
+    line-height: 1.1;
+    margin: 0;
+    max-width: 18ch;
+    background: linear-gradient(100deg, var(--ink) 40%, var(--focus) 90%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .lede {
+    font-size: 15.5px;
+    line-height: 1.6;
+    color: var(--ink-soft);
+    max-width: 48ch;
+    margin: 0;
+  }
+
+  .hero-row {
+    display: flex;
+    align-items: center;
+    gap: 22px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 18px 20px;
+    backdrop-filter: blur(20px);
+    box-shadow: var(--shadow);
+  }
+  .ratio-ring-wrap { position: relative; width: 92px; height: 92px; flex: none; }
+  .ratio-ring-wrap svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+  .ratio-center {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    font-family: 'IBM Plex Mono', monospace;
+    font-variant-numeric: tabular-nums;
+  }
+  .ratio-center .num { font-size: 15px; font-weight: 700; line-height: 1.1; }
+  .ratio-center .num.b { color: var(--break); }
+  .ratio-legend { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
+  .ratio-legend .row { display: flex; align-items: center; gap: 7px; color: var(--ink-soft); }
+  .ratio-legend .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .ratio-legend .dot.focus { background: var(--focus); box-shadow: 0 0 8px var(--focus); }
+  .ratio-legend .dot.brk { background: var(--break); box-shadow: 0 0 8px var(--break); }
+  .ratio-legend strong { color: var(--ink); }
+  .stats-mini { margin-left: auto; text-align: right; font-size: 12px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+  .stats-mini strong { display: block; font-family: 'IBM Plex Mono', monospace; font-size: 20px; color: var(--good); font-weight: 700; }
+
+  .setup-form {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 18px;
+    backdrop-filter: blur(20px);
+    box-shadow: var(--shadow);
+  }
+  .setup-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+  .field {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 9px 11px;
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  .field:focus-within { border-color: var(--focus); box-shadow: 0 0 0 3px var(--focus-soft); }
+  .field input {
+    width: 100%;
+    border: none;
+    background: transparent;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 19px;
+    font-weight: 600;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
+  .field input:focus { outline: none; }
+  .field span { font-size: 11.5px; color: var(--ink-soft); text-transform: none; letter-spacing: 0; white-space: nowrap; }
+
+  .preview { margin: 0; font-size: 13.5px; color: var(--ink-soft); }
+  .preview strong { color: var(--ink); }
+
+  .chip-row {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+  .chip {
+    flex: none;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 5px 9px;
+    border-radius: 999px;
+    color: var(--ink);
+  }
+  .chip.focus { background: var(--focus-soft); border: 1px solid rgba(110,139,255,.4); }
+  .chip.brk { background: var(--break-soft); border: 1px solid rgba(255,62,140,.4); }
+
+  .btn {
+    font-family: 'Karla', sans-serif;
+    font-weight: 700;
+    font-size: 15.5px;
+    letter-spacing: .01em;
+    border-radius: 14px;
+    padding: 16px 20px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: transform .15s ease, box-shadow .2s ease, border-color .2s ease, background .2s ease;
+  }
+  .btn:hover { transform: translateY(-2px) scale(1.01); }
+  .btn:active { transform: translateY(0) scale(.99); }
+  .btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+  .btn-primary {
+    background: linear-gradient(135deg, var(--focus), #9B6BFF);
+    color: #0A0D14;
+    box-shadow: 0 12px 32px -10px rgba(110, 139, 255, 0.55);
+  }
+  .btn-ghost {
+    background: var(--surface-2);
+    border-color: var(--border);
+    color: var(--ink);
+    flex: 1;
+    backdrop-filter: blur(20px);
+  }
+
+  /* ---- Running view ---- */
+  .running-view { align-items: stretch; }
+  .segment-track { display: flex; gap: 5px; }
+  .segment-dot {
+    flex: 1;
+    height: 7px;
+    border-radius: 5px;
+    background: var(--border);
+    transition: background .3s ease, box-shadow .3s ease;
+  }
+  .segment-dot.is-focus-type { background: var(--focus-soft); }
+  .segment-dot.is-break-type { background: var(--break-soft); }
+  .segment-dot.is-done { background: var(--good); }
+  .segment-dot.is-active {
+    background: var(--phase-accent, var(--focus));
+    box-shadow: 0 0 10px var(--phase-accent, var(--focus));
+  }
+
+  .stage {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 20px 0 4px;
+  }
+  .ring-wrap { position: relative; width: 264px; height: 264px; }
+  .ring-wrap svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+  .ring-track { opacity: .5; }
+  .ring-progress {
+    stroke-linecap: round;
+    filter: drop-shadow(0 0 14px var(--phase-accent, var(--focus)));
+    transition: stroke 0.4s ease;
+  }
+  .ring-center {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 2px;
+    animation: ringBreathe 4s ease-in-out infinite;
+  }
+  @keyframes ringBreathe {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.015); }
+  }
+  .phase-label {
+    font-family: 'Bricolage Grotesque', sans-serif;
+    font-weight: 700;
+    font-size: 22px;
+    margin: 0;
+    color: var(--phase-accent, var(--focus));
+    letter-spacing: .01em;
+  }
+  .timer {
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 700;
+    font-size: 58px;
+    line-height: 1;
+    margin: 2px 0;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+  }
+  .phase-sub { margin: 0; font-size: 13px; color: var(--ink-soft); }
+
+  .activity-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 22px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    text-align: center;
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(20px);
+  }
+  .activity-kicker {
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--break);
+    margin: 0;
+  }
+  .activity-prompt {
+    font-family: 'Bricolage Grotesque', sans-serif;
+    font-size: 22px;
+    font-weight: 600;
+    line-height: 1.35;
+    margin: 0;
+    max-width: 34ch;
+  }
+
+  .breathe-circle {
+    width: 96px;
+    height: 96px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #ff8fb8, var(--break) 70%);
+    box-shadow: 0 0 40px -4px var(--break);
+    animation: breathe 8s ease-in-out infinite;
+  }
+  @keyframes breathe {
+    0%, 100% { transform: scale(.7); }
+    50% { transform: scale(1.2); }
+  }
+  .breathe-word { font-weight: 700; font-size: 14px; color: var(--break); letter-spacing: .06em; text-transform: uppercase; }
+
+  .reaction-box {
+    position: relative;
+    width: 100%;
+    height: 160px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .reaction-dot {
+    position: absolute;
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #ff8fb8, var(--break) 70%);
+    box-shadow: 0 0 24px -2px var(--break);
+    border: none;
+    cursor: pointer;
+    transition: transform .12s cubic-bezier(.34,1.56,.64,1);
+  }
+  .reaction-dot:active { transform: scale(.8); }
+  .reaction-dot.pop { animation: dotPop .3s ease; }
+  @keyframes dotPop { 0% { transform: scale(1.4); } 100% { transform: scale(1); } }
+  .reaction-score { font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: var(--ink-soft); }
+  .reaction-score strong { color: var(--good); font-weight: 700; }
+
+  .controls { display: flex; gap: 10px; }
+
+  /* ---- Done view ---- */
+  .done-view h1 {
+    font-family: 'Bricolage Grotesque', sans-serif;
+    font-weight: 700;
+    font-size: 34px;
+    margin: 0;
+    background: linear-gradient(100deg, var(--ink) 30%, var(--good) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .done-stats { display: flex; gap: 12px; }
+  .done-stat {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 18px;
+    text-align: center;
+    backdrop-filter: blur(20px);
+    box-shadow: var(--shadow);
+  }
+  .done-stat .num {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 32px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--good);
+  }
+  .done-stat .label { font-size: 11.5px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .07em; margin-top: 4px; }
+
+  [hidden] { display: none !important; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .breathe-circle, .ring-center, .btn:hover { animation: none !important; transform: none !important; }
+    .flash-overlay.flash-active { animation: none; opacity: .35; }
+  }
+</style>
+
+<canvas id="bgCanvas"></canvas>
+<div class="vignette"></div>
+
+<div class="app">
+  <div class="flash-overlay" id="flashOverlay"></div>
+
+  <section class="view setup-view" id="setupView">
+    <p class="eyebrow">Focus Pulse</p>
+    <h1>Work in sprints. Break like you mean it.</h1>
+    <p class="lede">Set a focus block and a break length below. When a block ends we buzz and flash the screen so you're never watching the clock &mdash; then hand you 5 minutes of movement before pulling you back in.</p>
+
+    <div class="hero-row">
+      <div class="ratio-ring-wrap">
+        <svg viewBox="0 0 92 92">
+          <circle cx="46" cy="46" r="38" fill="none" stroke="var(--break)" stroke-width="10"></circle>
+          <circle id="ratioArc" cx="46" cy="46" r="38" fill="none" stroke="var(--focus)" stroke-width="10" stroke-linecap="round"></circle>
+        </svg>
+        <div class="ratio-center">
+          <span class="num" id="ratioFocusNum">25</span>
+          <span class="num b" id="ratioBreakNum">5</span>
+        </div>
+      </div>
+      <div class="ratio-legend">
+        <div class="row"><span class="dot focus"></span> <strong id="legendFocus">25</strong>&nbsp;min focus</div>
+        <div class="row"><span class="dot brk"></span> <strong id="legendBreak">5</strong>&nbsp;min break</div>
+      </div>
+      <div class="stats-mini">
+        <strong id="statsSprintsToday">0</strong>
+        sprints today
+      </div>
+    </div>
+
+    <form class="setup-form" id="setupForm">
+      <label>Total session
+        <div class="field"><input type="number" id="totalHours" min="0.5" max="8" step="0.25" value="2" inputmode="decimal"><span>hrs</span></div>
+      </label>
+      <label>Focus block
+        <div class="field"><input type="number" id="focusMin" min="5" max="90" step="1" value="25" inputmode="numeric"><span>min</span></div>
+      </label>
+      <label>Break
+        <div class="field"><input type="number" id="breakMin" min="1" max="30" step="1" value="5" inputmode="numeric"><span>min</span></div>
+      </label>
+    </form>
+
+    <p class="preview" id="cyclePreview"></p>
+    <div class="chip-row" id="chipRow"></div>
+    <button class="btn btn-primary" id="startBtn" type="button">Start session</button>
+  </section>
+
+  <section class="view running-view" id="runningView" hidden>
+    <div class="segment-track" id="segmentTrack"></div>
+    <div class="stage">
+      <div class="ring-wrap">
+        <svg viewBox="0 0 264 264">
+          <circle class="ring-track" cx="132" cy="132" r="118" fill="none" stroke="var(--border)" stroke-width="14"></circle>
+          <circle class="ring-progress" id="ringProgress" cx="132" cy="132" r="118" fill="none" stroke="var(--focus)" stroke-width="14"></circle>
+        </svg>
+        <div class="ring-center">
+          <p class="phase-label" id="phaseLabel">Focus</p>
+          <p class="timer" id="timerDisplay">25:00</p>
+          <p class="phase-sub" id="phaseSub">Block 1 of 4</p>
+        </div>
+      </div>
+    </div>
+    <div class="activity-panel" id="activityPanel" hidden></div>
+    <div class="controls">
+      <button class="btn btn-ghost" id="pauseBtn" type="button">Pause</button>
+      <button class="btn btn-ghost" id="endBtn" type="button">End session</button>
+    </div>
+  </section>
+
+  <section class="view done-view" id="doneView" hidden>
+    <p class="eyebrow">Session complete</p>
+    <h1 id="doneHeadline">Nice work &mdash; that's a wrap.</h1>
+    <div class="done-stats">
+      <div class="done-stat"><div class="num" id="doneSprints">0</div><div class="label">Sprints done</div></div>
+      <div class="done-stat"><div class="num" id="doneMinutes">0</div><div class="label">Min focused</div></div>
+    </div>
+    <button class="btn btn-primary" id="restartBtn" type="button">Start another</button>
+  </section>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var SETTINGS_KEY = "focusPulse.settings";
+  var STATS_KEY = "focusPulse.stats";
+  var reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  var setupView = document.getElementById("setupView");
+  var runningView = document.getElementById("runningView");
+  var doneView = document.getElementById("doneView");
+  var flashOverlay = document.getElementById("flashOverlay");
+
+  var totalHoursInput = document.getElementById("totalHours");
+  var focusMinInput = document.getElementById("focusMin");
+  var breakMinInput = document.getElementById("breakMin");
+  var cyclePreview = document.getElementById("cyclePreview");
+  var chipRow = document.getElementById("chipRow");
+  var statsSprintsToday = document.getElementById("statsSprintsToday");
+  var startBtn = document.getElementById("startBtn");
+  var ratioArc = document.getElementById("ratioArc");
+  var ratioFocusNum = document.getElementById("ratioFocusNum");
+  var ratioBreakNum = document.getElementById("ratioBreakNum");
+  var legendFocus = document.getElementById("legendFocus");
+  var legendBreak = document.getElementById("legendBreak");
+
+  var segmentTrack = document.getElementById("segmentTrack");
+  var phaseLabel = document.getElementById("phaseLabel");
+  var timerDisplay = document.getElementById("timerDisplay");
+  var phaseSub = document.getElementById("phaseSub");
+  var activityPanel = document.getElementById("activityPanel");
+  var pauseBtn = document.getElementById("pauseBtn");
+  var endBtn = document.getElementById("endBtn");
+  var ringProgress = document.getElementById("ringProgress");
+  var stageEl = document.querySelector(".stage");
+
+  var doneSprints = document.getElementById("doneSprints");
+  var doneMinutes = document.getElementById("doneMinutes");
+  var restartBtn = document.getElementById("restartBtn");
+
+  // ---------- ambient background ----------
+  var canvas = document.getElementById("bgCanvas");
+  var ctx = canvas.getContext("2d");
+  var W = 0, H = 0;
+  function resizeCanvas() {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+  }
+  resizeCanvas();
+  window.addEventListener("resize", resizeCanvas);
+
+  var COLORS = { focus: "110,139,255", brk: "255,62,140", good: "53,231,168" };
+  var currentTone = COLORS.focus;
+
+  function hexToRgbStr(c) { return COLORS[c]; }
+
+  var orbs = [];
+  (function seedOrbs() {
+    var n = 9;
+    for (var i = 0; i < n; i++) {
+      orbs.push({
+        x: Math.random() * W,
+        y: Math.random() * H,
+        r: 90 + Math.random() * 140,
+        vx: (Math.random() - 0.5) * 0.12,
+        vy: (Math.random() - 0.5) * 0.12,
+        tone: Math.random() < 0.7 ? "focus" : "brk",
+        alpha: 0.10 + Math.random() * 0.10
+      });
+    }
+  })();
+
+  var bursts = [];
+  function spawnBurst(x, y, tone, count) {
+    if (reducedMotion) return;
+    for (var i = 0; i < count; i++) {
+      var angle = Math.random() * Math.PI * 2;
+      var speed = 1.5 + Math.random() * 4.5;
+      bursts.push({
+        x: x, y: y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed - 1.5,
+        r: 2 + Math.random() * 3.5,
+        tone: tone,
+        life: 1
+      });
+    }
+  }
+
+  function drawFrame() {
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = "#0A0D14";
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.globalCompositeOperation = "lighter";
+    orbs.forEach(function (o) {
+      o.x += o.vx; o.y += o.vy;
+      if (o.x < -o.r) o.x = W + o.r; if (o.x > W + o.r) o.x = -o.r;
+      if (o.y < -o.r) o.y = H + o.r; if (o.y > H + o.r) o.y = -o.r;
+      var rgb = hexToRgbStr(o.tone);
+      var grad = ctx.createRadialGradient(o.x, o.y, 0, o.x, o.y, o.r);
+      grad.addColorStop(0, "rgba(" + rgb + "," + o.alpha + ")");
+      grad.addColorStop(1, "rgba(" + rgb + ",0)");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(o.x, o.y, o.r, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    for (var i = bursts.length - 1; i >= 0; i--) {
+      var p = bursts[i];
+      p.x += p.vx; p.y += p.vy; p.vy += 0.09; p.life -= 0.018;
+      if (p.life <= 0) { bursts.splice(i, 1); continue; }
+      var rgb2 = hexToRgbStr(p.tone);
+      ctx.fillStyle = "rgba(" + rgb2 + "," + Math.max(0, p.life) + ")";
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalCompositeOperation = "source-over";
+  }
+
+  if (reducedMotion) {
+    drawFrame();
+  } else {
+    (function loop() { drawFrame(); requestAnimationFrame(loop); })();
+  }
+
+  // ---------- persistence ----------
+  function loadSettings() {
+    try { var raw = localStorage.getItem(SETTINGS_KEY); return raw ? JSON.parse(raw) : null; } catch (e) { return null; }
+  }
+  function saveSettings(s) { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); } catch (e) {} }
+  function todayKey() { var d = new Date(); return d.getFullYear() + "-" + (d.getMonth() + 1) + "-" + d.getDate(); }
+  function loadStats() {
+    try {
+      var raw = localStorage.getItem(STATS_KEY);
+      var parsed = raw ? JSON.parse(raw) : null;
+      if (!parsed || parsed.date !== todayKey()) return { date: todayKey(), sprints: 0, minutes: 0 };
+      return parsed;
+    } catch (e) { return { date: todayKey(), sprints: 0, minutes: 0 }; }
+  }
+  function saveStats(s) { try { localStorage.setItem(STATS_KEY, JSON.stringify(s)); } catch (e) {} }
+
+  var stats = loadStats();
+  function renderStatsMini() { statsSprintsToday.textContent = String(stats.sprints); }
+
+  // ---------- setup ----------
+  var savedSettings = loadSettings();
+  if (savedSettings) {
+    totalHoursInput.value = savedSettings.totalHours;
+    focusMinInput.value = savedSettings.focusMin;
+    breakMinInput.value = savedSettings.breakMin;
+  }
+
+  function clamp(n, lo, hi) { return Math.min(hi, Math.max(lo, n)); }
+
+  function buildSegments(totalHours, focusMin, breakMin) {
+    var totalMinutes = totalHours * 60;
+    var cycleLen = focusMin + breakMin;
+    var fullCycles = Math.floor(totalMinutes / cycleLen);
+    var remainder = Math.round((totalMinutes - fullCycles * cycleLen) * 100) / 100;
+    var segments = [];
+    for (var i = 0; i < fullCycles; i++) {
+      segments.push({ type: "focus", minutes: focusMin });
+      segments.push({ type: "break", minutes: breakMin });
+    }
+    if (remainder >= Math.min(5, focusMin)) segments.push({ type: "focus", minutes: Math.min(remainder, focusMin) });
+    if (segments.length === 0) segments.push({ type: "focus", minutes: Math.max(1, Math.min(focusMin, totalMinutes)) });
+    return segments;
+  }
+
+  var RATIO_CIRC = 2 * Math.PI * 38;
+  ratioArc.setAttribute("stroke-dasharray", RATIO_CIRC.toFixed(2));
+
+  function updatePreview() {
+    var totalHours = parseFloat(totalHoursInput.value) || 0;
+    var focusMin = parseInt(focusMinInput.value, 10) || 0;
+    var breakMin = parseInt(breakMinInput.value, 10) || 0;
+    var segs = buildSegments(totalHours, focusMin, breakMin);
+    var focusCount = segs.filter(function (s) { return s.type === "focus"; }).length;
+    cyclePreview.innerHTML = "That's <strong>" + focusCount + "</strong> focus block" + (focusCount === 1 ? "" : "s") +
+      " with a movement break after each one (except the last).";
+
+    chipRow.innerHTML = "";
+    segs.slice(0, 14).forEach(function (s) {
+      var chip = document.createElement("span");
+      chip.className = "chip " + (s.type === "focus" ? "focus" : "brk");
+      chip.textContent = s.minutes + "m";
+      chipRow.appendChild(chip);
+    });
+
+    var frac = focusMin / Math.max(1, (focusMin + breakMin));
+    var offset = RATIO_CIRC * (1 - frac);
+    ratioArc.setAttribute("stroke-dashoffset", offset.toFixed(2));
+    ratioFocusNum.textContent = focusMin;
+    ratioBreakNum.textContent = breakMin;
+    legendFocus.textContent = focusMin;
+    legendBreak.textContent = breakMin;
+  }
+  [totalHoursInput, focusMinInput, breakMinInput].forEach(function (el) { el.addEventListener("input", updatePreview); });
+  updatePreview();
+  renderStatsMini();
+
+  // ---------- audio ----------
+  var audioCtx = null;
+  function getCtx() {
+    if (!audioCtx) { var Ctx = window.AudioContext || window.webkitAudioContext; audioCtx = new Ctx(); }
+    return audioCtx;
+  }
+  function beep(freq, startAt, duration, type) {
+    try {
+      var ctx2 = getCtx();
+      var osc = ctx2.createOscillator();
+      var gain = ctx2.createGain();
+      osc.type = type || "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, ctx2.currentTime + startAt);
+      gain.gain.exponentialRampToValueAtTime(0.2, ctx2.currentTime + startAt + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx2.currentTime + startAt + duration);
+      osc.connect(gain).connect(ctx2.destination);
+      osc.start(ctx2.currentTime + startAt);
+      osc.stop(ctx2.currentTime + startAt + duration + 0.05);
+    } catch (e) {}
+  }
+  function playBreakStartSound() { beep(523.25, 0, 0.13, "triangle"); beep(659.25, 0.12, 0.13, "triangle"); beep(783.99, 0.24, 0.24, "triangle"); }
+  function playBackToWorkSound() { beep(520, 0, 0.12, "square"); beep(390, 0.13, 0.26, "square"); }
+  function playDoneSound() { beep(523.25, 0, 0.12, "sine"); beep(659.25, 0.12, 0.12, "sine"); beep(783.99, 0.24, 0.12, "sine"); beep(1046.5, 0.36, 0.34, "sine"); }
+
+  function flash(color) {
+    flashOverlay.style.setProperty("--flash-color", color);
+    flashOverlay.classList.remove("flash-active");
+    void flashOverlay.offsetWidth;
+    flashOverlay.classList.add("flash-active");
+  }
+
+  // ---------- break activities ----------
+  var PROMPTS = [
+    "Do 10 jumping jacks, right where you're sitting or standing.",
+    "Shake out your hands, roll your shoulders backward 10 times.",
+    "Put on 20 seconds of a song you love and dance like nobody's watching.",
+    "Walk to the farthest window and name 5 things you can see.",
+    "Drink a full glass of water, slowly, standing up.",
+    "Do a 30-second wall sit &mdash; back flat against the wall, knees at 90&deg;.",
+    "Grab paper and doodle whatever's in front of you for 60 seconds.",
+    "Stretch your arms overhead and hold for 10 slow breaths.",
+    "Do 15 squats at your own pace.",
+    "Step outside or onto a balcony for a slow lap of fresh air.",
+    "Hum or sing the chorus of a song stuck in your head, loudly.",
+    "Splash cool water on your face and wrists."
+  ];
+  var lastActivityType = null;
+
+  function pickActivity() {
+    var options = ["prompt", "breathing", "reaction"];
+    if (lastActivityType) options = options.filter(function (o) { return o !== lastActivityType; });
+    var choice = options[Math.floor(Math.random() * options.length)];
+    lastActivityType = choice;
+    return choice;
+  }
+
+  var reactionInterval = null;
+  var breatheInterval = null;
+
+  function clearActivity() {
+    if (reactionInterval) { clearInterval(reactionInterval); reactionInterval = null; }
+    if (breatheInterval) { clearInterval(breatheInterval); breatheInterval = null; }
+    activityPanel.innerHTML = "";
+    activityPanel.hidden = true;
+  }
+
+  function renderPromptActivity() {
+    var text = PROMPTS[Math.floor(Math.random() * PROMPTS.length)];
+    activityPanel.innerHTML = '<p class="activity-kicker">Movement snack</p><p class="activity-prompt">' + text + "</p>";
+  }
+
+  function renderBreathingActivity() {
+    activityPanel.innerHTML =
+      '<p class="activity-kicker">Reset your breath</p>' +
+      '<div class="breathe-circle"></div>' +
+      '<p class="breathe-word" id="breatheWord">Breathe in</p>';
+    var word = document.getElementById("breatheWord");
+    var phaseIn = true;
+    breatheInterval = setInterval(function () { phaseIn = !phaseIn; word.textContent = phaseIn ? "Breathe in" : "Breathe out"; }, 4000);
+  }
+
+  function renderReactionActivity() {
+    activityPanel.innerHTML =
+      '<p class="activity-kicker">Quick tap game</p>' +
+      '<div class="reaction-box" id="reactionBox"><button class="reaction-dot" id="reactionDot" type="button" aria-label="Tap the dot"></button></div>' +
+      '<p class="reaction-score">Score: <strong id="reactionScore">0</strong></p>';
+    var box = document.getElementById("reactionBox");
+    var dot = document.getElementById("reactionDot");
+    var scoreEl = document.getElementById("reactionScore");
+    var score = 0;
+    function moveDot() {
+      var w = Math.max(0, box.clientWidth - 42);
+      var h = Math.max(0, box.clientHeight - 42);
+      dot.style.left = (Math.random() * w) + "px";
+      dot.style.top = (Math.random() * h) + "px";
+    }
+    dot.addEventListener("click", function () {
+      score++;
+      scoreEl.textContent = String(score);
+      var rect = box.getBoundingClientRect();
+      var dotRect = dot.getBoundingClientRect();
+      spawnBurst(dotRect.left + dotRect.width / 2, dotRect.top + dotRect.height / 2, "brk", 14);
+      dot.classList.remove("pop"); void dot.offsetWidth; dot.classList.add("pop");
+      moveDot();
+    });
+    moveDot();
+    reactionInterval = setInterval(moveDot, 1800);
+  }
+
+  function showBreakActivity() {
+    activityPanel.hidden = false;
+    var kind = pickActivity();
+    if (kind === "prompt") renderPromptActivity();
+    else if (kind === "breathing") renderBreathingActivity();
+    else renderReactionActivity();
+  }
+
+  // ---------- timer engine ----------
+  var segments = [];
+  var segIndex = 0;
+  var secondsLeft = 0;
+  var segTotalSeconds = 1;
+  var tickHandle = null;
+  var isPaused = false;
+  var completedFocusSegments = 0;
+  var completedFocusMinutes = 0;
+  var totalFocusBlocks = 0;
+
+  var RING_CIRC = 2 * Math.PI * 118;
+  ringProgress.setAttribute("stroke-dasharray", RING_CIRC.toFixed(2));
+
+  function formatTime(totalSeconds) {
+    var m = Math.floor(totalSeconds / 60);
+    var s = totalSeconds % 60;
+    return (m < 10 ? "0" + m : m) + ":" + (s < 10 ? "0" + s : s);
+  }
+
+  function setPhaseTheme(type) {
+    var accent = type === "break" ? "var(--break)" : "var(--focus)";
+    stageEl.style.setProperty("--phase-accent", accent);
+    ringProgress.setAttribute("stroke", type === "break" ? "#FF3E8C" : "#6E8BFF");
+    currentTone = type === "break" ? "brk" : "focus";
+    orbs.forEach(function (o) { o.tone = Math.random() < 0.75 ? currentTone : (currentTone === "brk" ? "focus" : "brk"); });
+  }
+
+  function renderSegmentTrack() {
+    segmentTrack.innerHTML = "";
+    segments.forEach(function (seg, i) {
+      var dot = document.createElement("div");
+      dot.className = "segment-dot " + (seg.type === "focus" ? "is-focus-type" : "is-break-type");
+      if (i < segIndex) dot.className += " is-done";
+      if (i === segIndex) dot.className += " is-active";
+      segmentTrack.appendChild(dot);
+    });
+  }
+
+  function focusBlockNumber(index) {
+    var count = 0;
+    for (var i = 0; i <= index; i++) if (segments[i].type === "focus") count++;
+    return count;
+  }
+
+  function updateRing() {
+    var frac = clamp(secondsLeft / segTotalSeconds, 0, 1);
+    var offset = RING_CIRC * (1 - frac);
+    ringProgress.setAttribute("stroke-dashoffset", offset.toFixed(2));
+  }
+
+  function startSegment(index) {
+    segIndex = index;
+    var seg = segments[segIndex];
+    secondsLeft = Math.round(seg.minutes * 60);
+    segTotalSeconds = secondsLeft;
+    setPhaseTheme(seg.type);
+    phaseLabel.textContent = seg.type === "focus" ? "Focus" : "Break";
+    phaseSub.textContent = seg.type === "focus"
+      ? "Block " + focusBlockNumber(segIndex) + " of " + totalFocusBlocks
+      : "Move for a bit — back to work soon";
+    renderSegmentTrack();
+    updateRing();
+    if (seg.type === "break") {
+      flash("#FF3E8C");
+      playBreakStartSound();
+      spawnBurst(W / 2, H * 0.38, "brk", 40);
+      showBreakActivity();
+    } else {
+      flash("#6E8BFF");
+      playBackToWorkSound();
+      spawnBurst(W / 2, H * 0.38, "focus", 24);
+      clearActivity();
+    }
+    timerDisplay.textContent = formatTime(secondsLeft);
+  }
+
+  function tick() {
+    if (isPaused) return;
+    secondsLeft--;
+    if (secondsLeft < 0) {
+      var finishedSeg = segments[segIndex];
+      if (finishedSeg.type === "focus") { completedFocusSegments++; completedFocusMinutes += finishedSeg.minutes; }
+      var nextIndex = segIndex + 1;
+      if (nextIndex >= segments.length) { finishSession(); return; }
+      startSegment(nextIndex);
+      return;
+    }
+    timerDisplay.textContent = formatTime(secondsLeft);
+    updateRing();
+  }
+
+  function finishSession() {
+    clearInterval(tickHandle); tickHandle = null;
+    clearActivity();
+    flash("#35E7A8");
+    playDoneSound();
+    spawnBurst(W / 2, H * 0.4, "good", 60);
+    spawnBurst(W * 0.3, H * 0.3, "focus", 30);
+    spawnBurst(W * 0.7, H * 0.3, "brk", 30);
+    recordCompletion();
+    showDoneView();
+  }
+
+  function recordCompletion() {
+    stats = loadStats();
+    stats.sprints += completedFocusSegments;
+    stats.minutes += Math.round(completedFocusMinutes);
+    saveStats(stats);
+  }
+
+  function showDoneView() {
+    runningView.hidden = true;
+    doneView.hidden = false;
+    doneSprints.textContent = String(completedFocusSegments);
+    doneMinutes.textContent = String(Math.round(completedFocusMinutes));
+  }
+
+  function startTimerEngine() {
+    var totalHours = clamp(parseFloat(totalHoursInput.value) || 2, 0.25, 12);
+    var focusMin = clamp(parseInt(focusMinInput.value, 10) || 25, 1, 180);
+    var breakMin = clamp(parseInt(breakMinInput.value, 10) || 5, 1, 60);
+    saveSettings({ totalHours: totalHours, focusMin: focusMin, breakMin: breakMin });
+
+    segments = buildSegments(totalHours, focusMin, breakMin);
+    totalFocusBlocks = segments.filter(function (s) { return s.type === "focus"; }).length;
+    completedFocusSegments = 0;
+    completedFocusMinutes = 0;
+    lastActivityType = null;
+    isPaused = false;
+    pauseBtn.textContent = "Pause";
+
+    setupView.hidden = true;
+    doneView.hidden = true;
+    runningView.hidden = false;
+
+    startSegment(0);
+    tickHandle = setInterval(tick, 1000);
+  }
+
+  startBtn.addEventListener("click", startTimerEngine);
+
+  pauseBtn.addEventListener("click", function () {
+    isPaused = !isPaused;
+    pauseBtn.textContent = isPaused ? "Resume" : "Pause";
+  });
+
+  endBtn.addEventListener("click", function () {
+    if (tickHandle) { clearInterval(tickHandle); tickHandle = null; }
+    clearActivity();
+    recordCompletion();
+    renderStatsMini();
+    runningView.hidden = true;
+    setupView.hidden = false;
+    updatePreview();
+  });
+
+  restartBtn.addEventListener("click", function () {
+    renderStatsMini();
+    doneView.hidden = true;
+    setupView.hidden = false;
+    updatePreview();
+  });
+})();
+</script>
+
+</body></html>
