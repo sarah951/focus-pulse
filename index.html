@@ -397,6 +397,23 @@
   }
   .done-stat .label { font-size: 11.5px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .07em; margin-top: 4px; }
 
+  .bg-note {
+    font-size: 11.5px;
+    color: var(--ink-soft);
+    text-align: center;
+    margin: 0;
+  }
+  .bg-note button {
+    background: none;
+    border: none;
+    color: var(--focus);
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+    padding: 0;
+    text-decoration: underline;
+  }
+
   [hidden] { display: none !important; }
 
   @media (prefers-reduced-motion: reduce) {
@@ -414,7 +431,7 @@
   <section class="view setup-view" id="setupView">
     <p class="eyebrow">Focus Pulse</p>
     <h1>Work in sprints. Break like you mean it.</h1>
-    <p class="lede">Set a focus block and a break length below. When a block ends we buzz and flash the screen so you're never watching the clock &mdash; then hand you 5 minutes of movement before pulling you back in.</p>
+    <p class="lede">Set a focus block and a break length below. When a block ends we buzz and flash the screen so you're never watching the clock &mdash; then hand you 5 minutes of movement before pulling you back in. The timer keeps accurate time and can notify you even if you switch tabs.</p>
 
     <div class="hero-row">
       <div class="ratio-ring-wrap">
@@ -452,6 +469,7 @@
     <p class="preview" id="cyclePreview"></p>
     <div class="chip-row" id="chipRow"></div>
     <button class="btn btn-primary" id="startBtn" type="button">Start session</button>
+    <p class="bg-note" id="notifyNote" hidden>Turn on notifications so Focus Pulse can ping you when you're on another tab. <button type="button" id="enableNotifyBtn">Enable notifications</button></p>
   </section>
 
   <section class="view running-view" id="runningView" hidden>
@@ -512,6 +530,8 @@
   var ratioBreakNum = document.getElementById("ratioBreakNum");
   var legendFocus = document.getElementById("legendFocus");
   var legendBreak = document.getElementById("legendBreak");
+  var notifyNote = document.getElementById("notifyNote");
+  var enableNotifyBtn = document.getElementById("enableNotifyBtn");
 
   var segmentTrack = document.getElementById("segmentTrack");
   var phaseLabel = document.getElementById("phaseLabel");
@@ -526,6 +546,8 @@
   var doneSprints = document.getElementById("doneSprints");
   var doneMinutes = document.getElementById("doneMinutes");
   var restartBtn = document.getElementById("restartBtn");
+
+  var BASE_TITLE = "Focus Pulse";
 
   // ---------- ambient background ----------
   var canvas = document.getElementById("bgCanvas");
@@ -576,6 +598,7 @@
     }
   }
 
+  var rafHandle = null;
   function drawFrame() {
     ctx.clearRect(0, 0, W, H);
     ctx.fillStyle = "#0A0D14";
@@ -609,11 +632,20 @@
     ctx.globalCompositeOperation = "source-over";
   }
 
-  if (reducedMotion) {
-    drawFrame();
-  } else {
-    (function loop() { drawFrame(); requestAnimationFrame(loop); })();
+  function startAmbientLoop() {
+    if (reducedMotion) { drawFrame(); return; }
+    if (rafHandle) return;
+    (function loop() { rafHandle = requestAnimationFrame(loop); drawFrame(); })();
   }
+  function stopAmbientLoop() {
+    if (rafHandle) { cancelAnimationFrame(rafHandle); rafHandle = null; }
+  }
+  startAmbientLoop();
+  // The decorative canvas loop pauses on hidden tabs (rAF does that automatically) —
+  // that's fine, it's just visual flair. The countdown itself does NOT depend on this loop.
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) startAmbientLoop();
+  });
 
   // ---------- persistence ----------
   function loadSettings() {
@@ -690,6 +722,32 @@
   [totalHoursInput, focusMinInput, breakMinInput].forEach(function (el) { el.addEventListener("input", updatePreview); });
   updatePreview();
   renderStatsMini();
+
+  // ---------- notifications (so phase changes reach you on another tab) ----------
+  var notifySupported = "Notification" in window;
+  function refreshNotifyNote() {
+    if (!notifySupported) { notifyNote.hidden = true; return; }
+    notifyNote.hidden = Notification.permission !== "default";
+  }
+  refreshNotifyNote();
+  if (notifySupported) {
+    enableNotifyBtn.addEventListener("click", function () {
+      Notification.requestPermission().then(refreshNotifyNote);
+    });
+  }
+  function notifyPhase(seg, isSessionDone) {
+    if (!notifySupported || Notification.permission !== "granted") return;
+    if (!document.hidden) return; // only ping when they're actually away
+    try {
+      if (isSessionDone) {
+        new Notification("Focus Pulse — session complete", { body: "Nice work, that's a wrap." });
+        return;
+      }
+      var title = seg.type === "focus" ? "Focus Pulse — back to work" : "Focus Pulse — break time";
+      var body = seg.type === "focus" ? "Break's over. Next focus block: " + seg.minutes + " min." : "Step away for " + seg.minutes + " min.";
+      new Notification(title, { body: body });
+    } catch (e) {}
+  }
 
   // ---------- audio ----------
   var audioCtx = null;
@@ -810,12 +868,23 @@
   }
 
   // ---------- timer engine ----------
+  // Time is tracked as real wall-clock timestamps (phaseEndAt), never as a
+  // decrementing tick counter. That's what keeps the countdown correct even
+  // when the browser throttles setInterval in a background tab: whenever a
+  // tick DOES fire (or the tab becomes visible again), we recompute the
+  // remaining time from Date.now() instead of trusting how many ticks we
+  // think we've seen, and we fast-forward through any phases that should
+  // already have completed while we were away.
   var segments = [];
   var segIndex = 0;
-  var secondsLeft = 0;
+  var phaseStartAt = 0;
+  var phaseEndAt = 0;
+  var remainingMsAtPause = 0;
   var segTotalSeconds = 1;
+  var secondsLeft = 0;
   var tickHandle = null;
   var isPaused = false;
+  var sessionActive = false;
   var completedFocusSegments = 0;
   var completedFocusMinutes = 0;
   var totalFocusBlocks = 0;
@@ -860,11 +929,18 @@
     ringProgress.setAttribute("stroke-dashoffset", offset.toFixed(2));
   }
 
-  function startSegment(index) {
+  // Enters segments[index] as the CURRENT segment: resets its start/end
+  // timestamps to "starting now" and refreshes all UI. Visual/audio effects
+  // (flash, beep, activity panel) are opt-out via `announce` so a catch-up
+  // pass that skips through several segments only announces the last one.
+  function enterSegment(index, announce) {
     segIndex = index;
     var seg = segments[segIndex];
-    secondsLeft = Math.round(seg.minutes * 60);
-    segTotalSeconds = secondsLeft;
+    var durationMs = Math.round(seg.minutes * 60000);
+    phaseStartAt = Date.now();
+    phaseEndAt = phaseStartAt + durationMs;
+    segTotalSeconds = Math.round(durationMs / 1000);
+    secondsLeft = segTotalSeconds;
     setPhaseTheme(seg.type);
     phaseLabel.textContent = seg.type === "focus" ? "Focus" : "Break";
     phaseSub.textContent = seg.type === "focus"
@@ -872,6 +948,9 @@
       : "Move for a bit — back to work soon";
     renderSegmentTrack();
     updateRing();
+    timerDisplay.textContent = formatTime(secondsLeft);
+    updateTitle();
+    if (announce === false) return;
     if (seg.type === "break") {
       flash("#FF3E8C");
       playBreakStartSound();
@@ -883,25 +962,60 @@
       spawnBurst(W / 2, H * 0.38, "focus", 24);
       clearActivity();
     }
-    timerDisplay.textContent = formatTime(secondsLeft);
+    notifyPhase(seg, false);
   }
 
-  function tick() {
-    if (isPaused) return;
-    secondsLeft--;
-    if (secondsLeft < 0) {
+  function updateTitle() {
+    if (!sessionActive) { document.title = BASE_TITLE; return; }
+    var phase = segments[segIndex] && segments[segIndex].type === "break" ? "Break" : "Focus";
+    document.title = formatTime(Math.max(0, secondsLeft)) + " · " + phase + " — " + BASE_TITLE;
+  }
+
+  // Recomputes state from the real clock. Called on every interval tick AND
+  // immediately whenever the tab regains visibility, so the display never
+  // shows stale time and multiple elapsed phases (e.g. the laptop slept
+  // through two blocks) are fast-forwarded correctly rather than silently lost.
+  function syncFromClock() {
+    if (!sessionActive || isPaused) return;
+    var now = Date.now();
+    var advancedThroughAny = false;
+    while (now >= phaseEndAt) {
       var finishedSeg = segments[segIndex];
       if (finishedSeg.type === "focus") { completedFocusSegments++; completedFocusMinutes += finishedSeg.minutes; }
       var nextIndex = segIndex + 1;
       if (nextIndex >= segments.length) { finishSession(); return; }
-      startSegment(nextIndex);
-      return;
+      advancedThroughAny = true;
+      segIndex = nextIndex;
+      var seg = segments[segIndex];
+      var durationMs = Math.round(seg.minutes * 60000);
+      phaseStartAt = phaseEndAt;
+      phaseEndAt = phaseStartAt + durationMs;
+      segTotalSeconds = Math.round(durationMs / 1000);
     }
-    timerDisplay.textContent = formatTime(secondsLeft);
+    secondsLeft = Math.max(0, Math.round((phaseEndAt - now) / 1000));
+    if (advancedThroughAny) {
+      // Only announce (flash/sound/activity) the segment we actually landed on —
+      // skipped-through segments during a long background gap stay silent.
+      setPhaseTheme(segments[segIndex].type);
+      phaseLabel.textContent = segments[segIndex].type === "focus" ? "Focus" : "Break";
+      phaseSub.textContent = segments[segIndex].type === "focus"
+        ? "Block " + focusBlockNumber(segIndex) + " of " + totalFocusBlocks
+        : "Move for a bit — back to work soon";
+      renderSegmentTrack();
+      if (segments[segIndex].type === "break") showBreakActivity(); else clearActivity();
+      notifyPhase(segments[segIndex], false);
+    }
     updateRing();
+    timerDisplay.textContent = formatTime(secondsLeft);
+    updateTitle();
+  }
+
+  function tick() {
+    syncFromClock();
   }
 
   function finishSession() {
+    sessionActive = false;
     clearInterval(tickHandle); tickHandle = null;
     clearActivity();
     flash("#35E7A8");
@@ -910,6 +1024,8 @@
     spawnBurst(W * 0.3, H * 0.3, "focus", 30);
     spawnBurst(W * 0.7, H * 0.3, "brk", 30);
     recordCompletion();
+    notifyPhase(null, true);
+    updateTitle();
     showDoneView();
   }
 
@@ -933,19 +1049,25 @@
     var breakMin = clamp(parseInt(breakMinInput.value, 10) || 5, 1, 60);
     saveSettings({ totalHours: totalHours, focusMin: focusMin, breakMin: breakMin });
 
+    if (notifySupported && Notification.permission === "default") {
+      Notification.requestPermission().then(refreshNotifyNote);
+    }
+
     segments = buildSegments(totalHours, focusMin, breakMin);
     totalFocusBlocks = segments.filter(function (s) { return s.type === "focus"; }).length;
     completedFocusSegments = 0;
     completedFocusMinutes = 0;
     lastActivityType = null;
     isPaused = false;
+    sessionActive = true;
     pauseBtn.textContent = "Pause";
 
     setupView.hidden = true;
     doneView.hidden = true;
     runningView.hidden = false;
 
-    startSegment(0);
+    enterSegment(0, true);
+    if (tickHandle) clearInterval(tickHandle);
     tickHandle = setInterval(tick, 1000);
   }
 
@@ -953,14 +1075,21 @@
 
   pauseBtn.addEventListener("click", function () {
     isPaused = !isPaused;
+    if (isPaused) {
+      remainingMsAtPause = Math.max(0, phaseEndAt - Date.now());
+    } else {
+      phaseEndAt = Date.now() + remainingMsAtPause;
+    }
     pauseBtn.textContent = isPaused ? "Resume" : "Pause";
   });
 
   endBtn.addEventListener("click", function () {
+    sessionActive = false;
     if (tickHandle) { clearInterval(tickHandle); tickHandle = null; }
     clearActivity();
     recordCompletion();
     renderStatsMini();
+    updateTitle();
     runningView.hidden = true;
     setupView.hidden = false;
     updatePreview();
@@ -971,6 +1100,12 @@
     doneView.hidden = true;
     setupView.hidden = false;
     updatePreview();
+  });
+
+  // Catch up the instant the tab becomes visible again, instead of waiting
+  // up to a second for the throttled interval to fire on its own.
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden && sessionActive) syncFromClock();
   });
 })();
 </script>
